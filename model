@@ -1,0 +1,1188 @@
+# Alteryx Platform Metrics — Power BI Build Specification V3
+
+**Version:** 3.0  |  **Date:** April 16, 2026
+**Tool:** Power BI Desktop v2.147.1085.0 (September 2025)
+**Model:** `ayx_util` — FIN – FTO ALTERYX – UAT (live semantic model connection)
+**Source:** `CRDP_DEV_MIRROR.Direct_Report.*` (primary, pre-cutover)
+
+-----
+
+## Change Log — V2 → V3
+
+|# |Change                                                                                             |Driver                                                                               |
+|--|---------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
+|1 |Home right visual: Queue Depth line chart → **Scheduled Runs by LOB**                              |Remove redundancy with Queue Depth bars                                              |
+|2 |Home table: added **LOB column**, sort changed to **total compute hours DESC**                     |Community audience visibility, signal over alphabetic noise                          |
+|3 |Screen 3 renamed **Queue → Job Runs**                                                              |Intuitive language for dual audience                                                 |
+|4 |Job Runs table: sort changed to **Total_Duration_Seconds DESC**, Wait_Time_Formatted column dropped|Surface problem runs, eliminate duplication with visual                              |
+|5 |Workflows right visual: Governance Breakdown → **Avg Runtime by Workflow (Top 10 horizontal bar)** |Performance signal at workflow grain; governance story moves to tooltip/drill-through|
+|6 |Workflows KPI 2 sub 1: Orphaned → **% of Platform Compute from governance issues**                 |Quantify governance cost in compute terms                                            |
+|7 |Workflows: added **P95 Runtime** at workflow grain                                                 |Erratic-runtime signal                                                               |
+|8 |Adoption KPI 2: Collections count → **Collection Ownership Risk**                                  |Surface single-point-of-failure patterns                                             |
+|9 |Adoption: reframed around ownership concentration, not engagement                                  |User/collection ownership concentration is the differentiating adoption story        |
+|10|**Month-selection logic added** — CM/PM driven by user-selected month slicer, not `MAX(AYX_RUN_DT)`|Interactive month navigation across all four pages                                   |
+|11|Month slicer top-right, synced, defaults to most recent complete month                             |Dashboard-wide temporal consistency                                                  |
+
+-----
+
+## Part 1 — Global Design System
+
+### 1.1 Color Palette
+
+Unchanged from V2.
+
+|Token           |Hex      |Role                                         |Never Use For   |
+|----------------|---------|---------------------------------------------|----------------|
+|Standard bar    |`#B0B0B0`|All chart bars by default                    |Status signals  |
+|Highlight / peak|`#3B4B8C`|Outlier bars, peak markers, line charts      |Decorative fill |
+|Reference line  |`#808080`|Dashed avg / threshold lines                 |—               |
+|Card background |`#FFFFFF`|KPI card fill                                |—               |
+|Page background |`#F2EFE9`|Canvas — all four screens                    |—               |
+|Primary text    |`#1F1F1F`|KPI values, titles, table body               |—               |
+|Secondary text  |`#666666`|Sub-metrics, axis labels, annotations        |—               |
+|Total row bg    |`#2D2D2D`|Bold table footer background                 |—               |
+|Total row text  |`#FFFFFF`|Bold table footer text                       |—               |
+|WF Red          |`#D71E28`|Logo only                                    |Any data element|
+|Amber           |`#E5AC12`|Conditional formatting — caution / at-risk   |Bar fills       |
+|Red             |`#CC3333`|Conditional formatting — error / failure only|Bar fills       |
+|Green           |`#339933`|Conditional formatting — healthy / passing   |Bar fills       |
+
+
+> **Hard rule:** `#3B4B8C` is the only non-grey color applied to bar fills. Amber, red, and green appear exclusively in table conditional formatting and KPI sub-metric labels — never in chart bars.
+
+### 1.2 Typography
+
+Unchanged from V2.
+
+|Element                  |Font           |Size   |Weight  |Color    |
+|-------------------------|---------------|-------|--------|---------|
+|KPI headline number      |Lora           |28–36pt|Regular |`#1F1F1F`|
+|Section insight title    |Source Sans Pro|16pt   |SemiBold|`#1F1F1F`|
+|Chart annotation subtitle|Source Sans Pro|10pt   |Regular |`#666666`|
+|Axis labels              |Source Sans Pro|10pt   |Regular |`#666666`|
+|Table headers            |Source Sans Pro|11pt   |SemiBold|`#444444`|
+|Table cell values        |Source Sans Pro|10pt   |Regular |`#1F1F1F`|
+|KPI label                |Source Sans Pro|11pt   |Regular |`#666666`|
+|KPI sub-metrics          |Source Sans Pro|10pt   |Regular |`#666666`|
+
+### 1.3 KPI Card Anatomy — Enforced on All Screens
+
+```
+┌─────────────────────────────────────────────┐
+│  Label                    ← 11pt, #666666   │
+│                                              │
+│  Primary Value            ← 28–36pt, Lora   │
+│                                              │
+│  ─────────────────────────────────────────  │
+│  Sub-metric 1: value      ← 10pt, #666666   │
+│  Sub-metric 2: value      ← 10pt, #666666   │
+└─────────────────────────────────────────────┘
+```
+
+- **Exactly 2 sub-metrics per card.** Not 1, not 3. No exceptions.
+- Sub-metrics are plain strings: `"Sub-metric label: value"` — no arrows, no sparklines
+- Visual type: **Card (new)** throughout. Callout value = primary. Reference labels = sub-metrics.
+- Cards: equal width, equal height, full-width row, white fill, rounded corner, `#E0DDD8` border
+
+### 1.4 Layout — Reverse Pyramid (3 · 2 · 1)
+
+|Zone        |Approx Height|Content                              |
+|------------|-------------|-------------------------------------|
+|Header      |6–8%         |Page title + month slicer (top-right)|
+|KPI Row     |15–18%       |3 cards, equal width, 20px gutters   |
+|Visual Zone |45–50%       |2 visuals side by side               |
+|Detail Table|25–30%       |1 table, full width                  |
+
+Canvas: 1280 × 720px. Margins: 20px all sides. Gutters between all elements: 20px. Enable Snap to Grid (10px increments).
+
+### 1.5 Global Slicers — Synced Across All Four Screens
+
+|Slicer         |Source Field                                         |Definition                                         |Position                 |
+|---------------|-----------------------------------------------------|---------------------------------------------------|-------------------------|
+|**Month**      |`Dim_Date[Year_Month]`                               |User-selected month drives CM; PM = CM − 1         |**Top-right, every page**|
+|LOB            |`Collections_LineOfBusiness_Mapping[LOB_Level_3]`    |Owner-attributed at collection level               |Top-left cluster         |
+|Collection     |`Collections_LineOfBusiness_Mapping[COLLECTION_NAME]`|Collection dimension                               |Top-left cluster         |
+|Publisher Email|`USERS_EMPLOYEE_LOB[clean_email]`                    |Workflow author — resolved via `appInfos.CreatedBy`|Top-left cluster         |
+
+**Month slicer — mandatory specifications:**
+
+- Visual type: **Slicer (single-select dropdown)**
+- Position: top-right corner, aligned with page title baseline
+- Default behavior: most recent complete month (see Part 4.1 DAX pattern)
+- Sync Slicers panel: enabled on all four pages
+- Format: `YYYY-MM` label (e.g., “2026-03”), sorted descending
+
+Sync Slicers panel: all four slicers visible and synced on all four pages.
+
+### 1.6 Section Title Pattern
+
+Every visual section has two text elements directly above it:
+
+|Element            |Font                                  |Content                                  |
+|-------------------|--------------------------------------|-----------------------------------------|
+|Insight title      |Source Sans Pro 16pt SemiBold         |States the conclusion — not the category |
+|Annotation subtitle|Source Sans Pro 10pt Regular `#666666`|States the context — scope, grain, period|
+
+Example: **“3 workflows account for 62% of compute”** / *“Avg compute hours by workflow · Top 10 · Current month”*
+
+-----
+
+## Part 2 — Table Reference
+
+### 2.1 Direct_Report Tables (primary source)
+
+|Logical Role               |Table Name                          |Grain                                  |
+|---------------------------|------------------------------------|---------------------------------------|
+|Primary fact — job runs    |`QUEUE_WORKER_APPLICATION`          |One row per job execution              |
+|User + employee + LOB      |`USERS_EMPLOYEE_LOB`                |One row per user                       |
+|Session-level user + LOB   |`SESSIONS_USERS_LOB`                |One row per session                    |
+|Queue + user + LOB joined  |`QUEUE_USERS_LOB`                   |One row per job run with user context  |
+|Workflow + collection + LOB|`AYX_PROD_APPS_COLLECTION_SUMMARY`  |One row per workflow-collection pair   |
+|Collection → LOB dimension |`Collections_LineOfBusiness_Mapping`|One row per collection                 |
+|Direct user → collection   |`COLLECTION_USER_INVENTORY`         |One row per user-collection assignment |
+|AD group → collection      |`COLLECTION_GROUPS_INVENTORY`       |One row per group-collection assignment|
+|Schedule definitions       |`ENABLED_SCHEDULE_DETIALED_SUMMARY` |One row per schedule                   |
+|Change Champion flag       |`ChangeChampion`                    |One row per champion                   |
+|Ranked workflows by compute|`TARGET_APPS_RANKED`                |One row per workflow                   |
+|2-day error snapshot       |`QUEUE_2DAYWINDOWERROR_SNAPSHOT`    |Error-level                            |
+|2-day error summary        |`QUEUE_2DAYWINDOWERROR_SUMMARY`     |Aggregated errors                      |
+|100-day error inventory    |`QUEUE_100DAYWINDOWERROR_INVENTORY` |Error inventory                        |
+|Total error aggregation    |`TOTAL_ERROR_SUMMARY`               |Summary                                |
+|Date dimension             |`Dim_Date`                          |One row per calendar day               |
+
+### 2.2 QUEUE_WORKER_APPLICATION Confirmed Fields
+
+`AS_APPLICATION_ID` · `AYX_RUN_DT` · `JOB_ID` · `START_DATE` · `START_DT` · `START_TIME` · `END_DATE` · `END_DT` · `END_TIME` · `FUL_RUN_TIME` (Σ) · `QUEUE_TIME` (Σ) · `EXEC` (Σ) · `STATUS` · `BREACH_HALF_HOUR` · `BREACH_HOUR` · `BREACH_NORMAL_TIME` · `PEAK` · `SERVER_ID`
+
+### 2.3 Dim_Date Fields
+
+`Date_Key` · `Date_Int` · `Year_Int` · `Day_Int` · `Month_Int` · `Quarter_Int` · `Week_Int` · `Holiday_Name` · `Weekend_Flag` · `Holiday_Flag` · `Day_Label` · `Month_Start_Dt` · `Month_End_Dt` · `Month_Label` · `Rpt_Date_Flag` · `Rpt_Date_Month_Start` · `Rpt_Date_Month_End` · **`Year_Month`** (YYYY-MM format)
+
+> `Year_Month` is the key field driving the month slicer. If not present in the live model, create as a calculated column: `Year_Month = FORMAT(Dim_Date[Date_Key], "YYYY-MM")`
+
+### 2.4 Repeating Dimensions (by design — justified)
+
+|Field          |Reason                                    |Screens |
+|---------------|------------------------------------------|--------|
+|Publisher Email|Human-readable bridge from Alteryx user ID|All four|
+|LOB Level 3    |Owner-attributed at collection level      |All four|
+
+All other joins resolved through Power BI relationships. No other columns repeat.
+
+-----
+
+## Part 3 — Naming Conventions
+
+|Type               |Pattern                |Example                         |
+|-------------------|-----------------------|--------------------------------|
+|Calculated columns |PascalCase, descriptive|`Trigger_Type`, `Runtime_Bucket`|
+|Sort columns       |Suffix `_Sort`         |`Runtime_Bucket_Sort`           |
+|Governance flags   |Suffix `_Flag`         |`Is_Orphaned_Flag`              |
+|L2 base measures   |`Domain Metric_Base`   |`Queue Avg Runtime_Base`        |
+|L3 display measures|`Domain Metric`        |`Queue Avg Runtime`             |
+|Prior period base  |`Domain Metric PM_Base`|`Queue Avg Runtime PM_Base`     |
+|Date anchors       |Underscore prefix      |`_CM Start`, `_PM End`          |
+|Infrastructure     |Underscore prefix      |`_Rolling 30 Start`             |
+
+### Measure Folders
+
+|Folder           |Contents                                                 |
+|-----------------|---------------------------------------------------------|
+|`_Infrastructure`|Date anchors, month slicer logic, rolling window anchors |
+|`Home`           |Home screen measures                                     |
+|`Adoption`       |All adoption measures (including ownership concentration)|
+|`Job Runs`       |All job run measures (formerly `Queue`)                  |
+|`Workflows`      |All workflow measures                                    |
+
+-----
+
+## Part 4 — DAX: Shared Infrastructure
+
+### 4.1 Month-Selection Anchors (new in V3)
+
+> **Dashboard-wide temporal model.** CM and PM driven by user’s Month slicer selection. Default = most recent complete month in data when nothing is selected.
+
+```dax
+-- Default month = most recent complete month in fact table
+-- Used as fallback when slicer has no selection
+_Default Month =
+VAR MaxDate =
+    CALCULATE(
+        MAX( QUEUE_WORKER_APPLICATION[AYX_RUN_DT] ),
+        ALL( QUEUE_WORKER_APPLICATION )
+    )
+VAR MaxMonthEnd = EOMONTH( MaxDate, 0 )
+-- If the most recent date is mid-month, fall back to prior complete month
+VAR DefaultMonthStart =
+    IF( MaxDate < MaxMonthEnd, EOMONTH( MaxDate, -2 ) + 1, EOMONTH( MaxDate, -1 ) + 1 )
+RETURN FORMAT( DefaultMonthStart, "YYYY-MM" )
+
+-- Active month = user's slicer selection, or default if nothing selected
+_Active Month =
+COALESCE(
+    SELECTEDVALUE( Dim_Date[Year_Month] ),
+    [_Default Month]
+)
+
+-- Current Month anchors — driven by slicer selection
+_CM Start =
+CALCULATE(
+    MIN( Dim_Date[Date_Key] ),
+    FILTER( ALL( Dim_Date ), Dim_Date[Year_Month] = [_Active Month] )
+)
+
+_CM End =
+CALCULATE(
+    MAX( Dim_Date[Date_Key] ),
+    FILTER( ALL( Dim_Date ), Dim_Date[Year_Month] = [_Active Month] )
+)
+
+-- Prior Month anchors — always one calendar month before _Active Month
+_PM Start = EOMONTH( [_CM Start], -2 ) + 1
+
+_PM End = EOMONTH( [_CM Start], -1 )
+```
+
+### 4.2 Rolling 30-Day Anchors (unchanged)
+
+> Adoption screen only, for Active Users rolling comparison. Independent of month slicer.
+
+```dax
+_Rolling 30 Start =
+CALCULATE( MAX( QUEUE_WORKER_APPLICATION[AYX_RUN_DT] ), ALL( QUEUE_WORKER_APPLICATION ) ) - 30
+
+_Rolling 30 Prior Start =
+CALCULATE( MAX( QUEUE_WORKER_APPLICATION[AYX_RUN_DT] ), ALL( QUEUE_WORKER_APPLICATION ) ) - 60
+
+_Rolling 30 Prior End =
+CALCULATE( MAX( QUEUE_WORKER_APPLICATION[AYX_RUN_DT] ), ALL( QUEUE_WORKER_APPLICATION ) ) - 31
+```
+
+### 4.3 H:MM:SS Format Pattern
+
+Inlined into every runtime display measure. DAX has no reusable format functions.
+
+```
+-- Reference pattern only — not a deployable measure
+VAR TotalSec = [Relevant_Base_Measure]
+VAR H = INT( TotalSec / 3600 )
+VAR M = INT( MOD( TotalSec, 3600 ) / 60 )
+VAR S = INT( MOD( TotalSec, 60 ) )
+RETURN FORMAT( H, "0" ) & ":" & FORMAT( M, "00" ) & ":" & FORMAT( S, "00" )
+-- [CONFIRM] FUL_RUN_TIME and QUEUE_TIME units are seconds
+```
+
+-----
+
+## Part 5 — DAX: Calculated Columns
+
+### 5.1 QUEUE_WORKER_APPLICATION
+
+```dax
+-- Classifies each run as Scheduled or Manual
+-- Requires relationship to ENABLED_SCHEDULE_DETIALED_SUMMARY via AS_APPLICATION_ID
+Trigger_Type =
+IF(
+    COUNTROWS( RELATEDTABLE( ENABLED_SCHEDULE_DETIALED_SUMMARY ) ) > 0,
+    "Scheduled",
+    "Manual"
+)
+```
+
+```dax
+-- Runtime bucket for Job Runs distribution chart. FUL_RUN_TIME in seconds [CONFIRM]
+Runtime_Bucket =
+VAR Mins = QUEUE_WORKER_APPLICATION[FUL_RUN_TIME] / 60
+RETURN
+    SWITCH( TRUE(),
+        Mins <= 1,  "0–1 min",
+        Mins <= 5,  "1–5 min",
+        Mins <= 15, "5–15 min",
+        Mins <= 30, "15–30 min",
+                    "30+ min"
+    )
+
+Runtime_Bucket_Sort =
+SWITCH( QUEUE_WORKER_APPLICATION[Runtime_Bucket],
+    "0–1 min",   1,
+    "1–5 min",   2,
+    "5–15 min",  3,
+    "15–30 min", 4,
+    "30+ min",   5
+)
+```
+
+```dax
+-- Hour of day for Wait Time by Hour chart
+Run_Hour = HOUR( QUEUE_WORKER_APPLICATION[START_DT] )
+```
+
+```dax
+-- Binary error flag. [CONFIRM exact STATUS value]
+Is_Error = IF( QUEUE_WORKER_APPLICATION[STATUS] = "Error", 1, 0 )
+```
+
+```dax
+-- H:MM:SS formatted columns
+Runtime_Formatted =
+VAR TotalSec = QUEUE_WORKER_APPLICATION[FUL_RUN_TIME]
+VAR H = INT( TotalSec / 3600 )
+VAR M = INT( MOD( TotalSec, 3600 ) / 60 )
+VAR S = INT( MOD( TotalSec, 60 ) )
+RETURN FORMAT( H, "0" ) & ":" & FORMAT( M, "00" ) & ":" & FORMAT( S, "00" )
+
+Wait_Time_Formatted =
+VAR TotalSec = QUEUE_WORKER_APPLICATION[QUEUE_TIME]
+VAR H = INT( TotalSec / 3600 )
+VAR M = INT( MOD( TotalSec, 3600 ) / 60 )
+VAR S = INT( MOD( TotalSec, 60 ) )
+RETURN FORMAT( H, "0" ) & ":" & FORMAT( M, "00" ) & ":" & FORMAT( S, "00" )
+
+-- Total duration column for sort ordering
+Total_Duration_Seconds =
+COALESCE( QUEUE_WORKER_APPLICATION[FUL_RUN_TIME], 0 )
+    + COALESCE( QUEUE_WORKER_APPLICATION[QUEUE_TIME], 0 )
+```
+
+### 5.2 USERS_EMPLOYEE_LOB
+
+```dax
+-- Days since last login. [CONFIRM LastLoginDate field name]
+Days_Since_Login = DATEDIFF( USERS_EMPLOYEE_LOB[LastLoginDate], TODAY(), DAY )
+
+Login_Recency_Bucket =
+SWITCH( TRUE(),
+    USERS_EMPLOYEE_LOB[Days_Since_Login] <= 14, "0–14 days",
+    USERS_EMPLOYEE_LOB[Days_Since_Login] <= 30, "15–30 days",
+    USERS_EMPLOYEE_LOB[Days_Since_Login] <= 90, "31–90 days",
+                                                "90+ days"
+)
+
+Login_Bucket_Sort =
+SWITCH( USERS_EMPLOYEE_LOB[Login_Recency_Bucket],
+    "0–14 days",  1,
+    "15–30 days", 2,
+    "31–90 days", 3,
+    "90+ days",   4
+)
+
+Role_Label =
+SWITCH( TRUE(),
+    USERS_EMPLOYEE_LOB[Role] = 0, "Viewer",
+    USERS_EMPLOYEE_LOB[Role] = 2, "Artisan",
+    USERS_EMPLOYEE_LOB[Role] = 3, "Curator",
+    "Unknown"
+)
+
+Is_Change_Champion =
+IF(
+    NOT( ISBLANK(
+        LOOKUPVALUE(
+            ChangeChampion[Email],
+            ChangeChampion[Email],
+            USERS_EMPLOYEE_LOB[clean_email]
+        )
+    ) ),
+    1, 0
+)
+```
+
+### 5.3 AYX_PROD_APPS_COLLECTION_SUMMARY
+
+```dax
+-- Orphaned workflow flag — no collection assigned
+Is_Orphaned_Flag =
+IF( ISBLANK( AYX_PROD_APPS_COLLECTION_SUMMARY[COLLECTION_NAME] ), 1, 0 )
+
+-- Duplicate workflow name flag
+Is_Duplicate_Flag =
+VAR CurrentName = AYX_PROD_APPS_COLLECTION_SUMMARY[APPNAME]
+VAR NameCount =
+    COUNTROWS(
+        FILTER(
+            ALL( AYX_PROD_APPS_COLLECTION_SUMMARY ),
+            AYX_PROD_APPS_COLLECTION_SUMMARY[APPNAME] = CurrentName
+                && NOT( ISBLANK( AYX_PROD_APPS_COLLECTION_SUMMARY[APPNAME] ) )
+        )
+    )
+RETURN IF( NameCount > 1, 1, 0 )
+```
+
+### 5.4 Dim_Date
+
+```dax
+-- Add if not present in existing Dim_Date
+Year_Month = FORMAT( Dim_Date[Date_Key], "YYYY-MM" )
+```
+
+### 5.5 Governance Issue Type Table
+
+```dax
+GovernanceIssueType =
+DATATABLE( "Type", STRING, "Sort", INTEGER, {
+    { "Orphaned",             1 },
+    { "Duplicate Name",       2 },
+    { "No AD Group",          3 },
+    { "Direct User IDs Only", 4 }
+} )
+```
+
+-----
+
+## Part 6 — DAX: Measures by Screen
+
+### 6.1 Home Measures (refined in V3)
+
+The existing Home KPIs stay. New measure added for the right-side visual.
+
+```dax
+-- Scheduled Runs by LOB (new visual — replaces Queue Depth line chart)
+Home Scheduled Runs CM_Base =
+CALCULATE(
+    COUNTROWS( QUEUE_WORKER_APPLICATION ),
+    QUEUE_WORKER_APPLICATION[Trigger_Type] = "Scheduled",
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+-- Place on X-axis of LOB bar; Collections_LineOfBusiness_Mapping[LOB_Level_3] on Y-axis
+
+-- Top Workflows compute sort measure for detail table
+Home Workflow Compute Hours CM_Base =
+DIVIDE(
+    CALCULATE(
+        SUM( QUEUE_WORKER_APPLICATION[FUL_RUN_TIME] ),
+        QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+        QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+    ),
+    3600
+)
+```
+
+### 6.2 Adoption Measures
+
+#### L2 Base — existing (unchanged)
+
+```dax
+Adoption Server Users_Base = COUNTROWS( USERS_EMPLOYEE_LOB )
+
+Adoption Change Champions_Base =
+CALCULATE( COUNTROWS( USERS_EMPLOYEE_LOB ), USERS_EMPLOYEE_LOB[Is_Change_Champion] = 1 )
+
+Adoption Artisan Count_Base =
+CALCULATE( COUNTROWS( USERS_EMPLOYEE_LOB ), USERS_EMPLOYEE_LOB[Role] = 2 )
+
+Adoption Active Users_Base =
+CALCULATE(
+    DISTINCTCOUNT( QUEUE_USERS_LOB[clean_email] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_Rolling 30 Start]
+)
+
+Adoption Active Users Prior 30_Base =
+CALCULATE(
+    DISTINCTCOUNT( QUEUE_USERS_LOB[clean_email] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_Rolling 30 Prior Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_Rolling 30 Prior End]
+)
+
+Adoption Active User Pct_Base =
+DIVIDE( [Adoption Active Users_Base], [Adoption Server Users_Base], 0 )
+
+Adoption Owned Workflows_Base =
+CALCULATE( DISTINCTCOUNT( AYX_PROD_APPS_COLLECTION_SUMMARY[APPNAME] ) )
+```
+
+#### L2 Base — NEW in V3 for Collection Ownership Risk
+
+```dax
+-- Count of owners who own 5+ collections
+-- Replaces the original Adoption Collections_Base on KPI 2
+Adoption High Concentration Owners_Base =
+COUNTROWS(
+    FILTER(
+        SUMMARIZE(
+            Collections_LineOfBusiness_Mapping,
+            Collections_LineOfBusiness_Mapping[OWNER_EMAIL],
+            "CollCount", DISTINCTCOUNT( Collections_LineOfBusiness_Mapping[COLLECTION_NAME] )
+        ),
+        [CollCount] >= 5
+    )
+)
+-- [CONFIRM OWNER_EMAIL field name in Collections_LineOfBusiness_Mapping]
+
+-- Average collections per owner
+Adoption Avg Collections Per Owner_Base =
+DIVIDE(
+    DISTINCTCOUNT( Collections_LineOfBusiness_Mapping[COLLECTION_NAME] ),
+    DISTINCTCOUNT( Collections_LineOfBusiness_Mapping[OWNER_EMAIL] ),
+    0
+)
+
+-- Max collections owned by any single owner
+Adoption Max Collections Single Owner_Base =
+MAXX(
+    SUMMARIZE(
+        Collections_LineOfBusiness_Mapping,
+        Collections_LineOfBusiness_Mapping[OWNER_EMAIL],
+        "CollCount", DISTINCTCOUNT( Collections_LineOfBusiness_Mapping[COLLECTION_NAME] )
+    ),
+    [CollCount]
+)
+```
+
+#### L3 Display
+
+```dax
+-- KPI Card 1: Server Users
+Adoption Server Users =
+FORMAT( [Adoption Server Users_Base], "#,0" )
+
+Adoption Change Champions Label =
+"Change Champions:  " & FORMAT( [Adoption Change Champions_Base], "#,0" )
+
+Adoption Artisan Count Label =
+"Artisan Role Count:  " & FORMAT( [Adoption Artisan Count_Base], "#,0" )
+
+-- KPI Card 2: Collection Ownership Risk (NEW in V3)
+Adoption Collection Ownership Risk =
+FORMAT( [Adoption High Concentration Owners_Base], "#,0" )
+
+Adoption Avg Collections Per Owner Label =
+"Avg Collections per Owner:  " & FORMAT( [Adoption Avg Collections Per Owner_Base], "0.0" )
+
+Adoption Max Collections Label =
+"Max Collections (Single Owner):  " & FORMAT( [Adoption Max Collections Single Owner_Base], "#,0" )
+
+-- KPI Card 3: Active Users
+Adoption Active Users =
+FORMAT( [Adoption Active Users_Base], "#,0" )
+
+Adoption Active User Pct Label =
+"% of Licensed Users:  " & FORMAT( [Adoption Active User Pct_Base], "0.0%" )
+
+Adoption Active Users Prior Label =
+"Prior 30-Day Active:  " & FORMAT( [Adoption Active Users Prior 30_Base], "#,0" )
+
+-- Table column
+Adoption Owned Workflows =
+FORMAT( [Adoption Owned Workflows_Base], "#,0" )
+```
+
+### 6.3 Job Runs Measures (formerly Queue)
+
+All measure names retained as `Queue ...` for backward compatibility with existing semantic model references.
+
+#### L2 Base
+
+```dax
+Queue Total Runs CM_Base =
+CALCULATE(
+    COUNTROWS( QUEUE_WORKER_APPLICATION ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+Queue Scheduled Runs CM_Base =
+CALCULATE( [Queue Total Runs CM_Base], QUEUE_WORKER_APPLICATION[Trigger_Type] = "Scheduled" )
+
+Queue Manual Runs CM_Base =
+[Queue Total Runs CM_Base] - [Queue Scheduled Runs CM_Base]
+
+Queue Avg Runtime CM_Base =
+CALCULATE(
+    AVERAGE( QUEUE_WORKER_APPLICATION[FUL_RUN_TIME] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+Queue Avg Runtime PM_Base =
+CALCULATE(
+    AVERAGE( QUEUE_WORKER_APPLICATION[FUL_RUN_TIME] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_PM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_PM End]
+)
+
+Queue P95 Runtime CM_Base =
+CALCULATE(
+    PERCENTILEX.INC( QUEUE_WORKER_APPLICATION, QUEUE_WORKER_APPLICATION[FUL_RUN_TIME], 0.95 ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+Queue Failed Runs CM_Base =
+CALCULATE(
+    COUNTROWS( QUEUE_WORKER_APPLICATION ),
+    QUEUE_WORKER_APPLICATION[Is_Error] = 1,
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+Queue Error Rate CM_Base =
+DIVIDE( [Queue Failed Runs CM_Base], [Queue Total Runs CM_Base], 0 )
+
+Queue Error Rate PM_Base =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS( QUEUE_WORKER_APPLICATION ),
+        QUEUE_WORKER_APPLICATION[Is_Error] = 1,
+        QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_PM Start],
+        QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_PM End]
+    ),
+    CALCULATE(
+        COUNTROWS( QUEUE_WORKER_APPLICATION ),
+        QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_PM Start],
+        QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_PM End]
+    ),
+    0
+)
+
+Queue Avg Wait Time CM_Base =
+CALCULATE(
+    AVERAGE( QUEUE_WORKER_APPLICATION[QUEUE_TIME] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+Queue Run Count By Bucket_Base =
+CALCULATE(
+    COUNTROWS( QUEUE_WORKER_APPLICATION ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+```
+
+#### L3 Display
+
+```dax
+-- KPI Card 1
+Queue Total Runs =
+FORMAT( [Queue Total Runs CM_Base], "#,0" )
+
+Queue Scheduled Runs Label =
+"Scheduled Runs:  " & FORMAT( [Queue Scheduled Runs CM_Base], "#,0" )
+
+Queue Manual Runs Label =
+"Manual Runs:  " & FORMAT( [Queue Manual Runs CM_Base], "#,0" )
+
+-- KPI Card 2
+Queue Avg Runtime =
+VAR S = [Queue Avg Runtime CM_Base]
+RETURN FORMAT( INT( S / 3600 ), "0" ) & ":" & FORMAT( INT( MOD( S, 3600 ) / 60 ), "00" ) & ":" & FORMAT( INT( MOD( S, 60 ) ), "00" )
+
+Queue P95 Runtime Label =
+VAR S = [Queue P95 Runtime CM_Base]
+RETURN "P95 Runtime:  " & FORMAT( INT( S / 3600 ), "0" ) & ":" & FORMAT( INT( MOD( S, 3600 ) / 60 ), "00" ) & ":" & FORMAT( INT( MOD( S, 60 ) ), "00" )
+
+Queue Avg Runtime PM Label =
+VAR S = [Queue Avg Runtime PM_Base]
+RETURN "Prior Month Avg:  " & FORMAT( INT( S / 3600 ), "0" ) & ":" & FORMAT( INT( MOD( S, 3600 ) / 60 ), "00" ) & ":" & FORMAT( INT( MOD( S, 60 ) ), "00" )
+
+-- KPI Card 3
+Queue Error Rate =
+FORMAT( [Queue Error Rate CM_Base], "0.0%" )
+
+Queue Failed Runs Label =
+"Failed Run Count:  " & FORMAT( [Queue Failed Runs CM_Base], "#,0" )
+
+Queue Error Rate PM Label =
+"Prior Month Error Rate:  " & FORMAT( [Queue Error Rate PM_Base], "0.0%" )
+
+-- Dynamic insight title for Wait Time chart
+Queue Wait Time Chart Title =
+VAR PeakHour =
+    MAXX(
+        TOPN( 1,
+            SUMMARIZE(
+                CALCULATE( QUEUE_WORKER_APPLICATION,
+                    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+                    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+                ),
+                QUEUE_WORKER_APPLICATION[Run_Hour],
+                "AvgWait", AVERAGE( QUEUE_WORKER_APPLICATION[QUEUE_TIME] )
+            ),
+            [AvgWait], DESC
+        ),
+        QUEUE_WORKER_APPLICATION[Run_Hour]
+    )
+RETURN "Peak server wait occurs at " & FORMAT( TIME( PeakHour, 0, 0 ), "h AM/PM" )
+```
+
+### 6.4 Workflows Measures (refined in V3)
+
+#### L2 Base — existing (unchanged)
+
+```dax
+Workflow Total_Base =
+DISTINCTCOUNT( AYX_PROD_APPS_COLLECTION_SUMMARY[AS_APPLICATION_ID] )
+
+Workflow Scheduled_Base =
+CALCULATE( DISTINCTCOUNT( ENABLED_SCHEDULE_DETIALED_SUMMARY[AS_APPLICATION_ID] ) )
+
+Workflow Unscheduled_Base =
+[Workflow Total_Base] - [Workflow Scheduled_Base]
+
+Workflow Orphaned_Base =
+CALCULATE(
+    DISTINCTCOUNT( AYX_PROD_APPS_COLLECTION_SUMMARY[AS_APPLICATION_ID] ),
+    AYX_PROD_APPS_COLLECTION_SUMMARY[Is_Orphaned_Flag] = 1
+)
+
+Workflow Duplicates_Base =
+CALCULATE(
+    DISTINCTCOUNT( AYX_PROD_APPS_COLLECTION_SUMMARY[AS_APPLICATION_ID] ),
+    AYX_PROD_APPS_COLLECTION_SUMMARY[Is_Duplicate_Flag] = 1
+)
+
+Workflow Governance Issues_Base =
+[Workflow Orphaned_Base] + [Workflow Duplicates_Base]
+
+Workflow Collections No AD Group_Base =
+DISTINCTCOUNT( Collections_LineOfBusiness_Mapping[COLLECTION_NAME] )
+    - DISTINCTCOUNT( COLLECTION_GROUPS_INVENTORY[COLLECTION_NAME] )
+
+Workflow Collections Direct Users Only_Base =
+VAR DirectOnly =
+    EXCEPT(
+        SELECTCOLUMNS( COLLECTION_USER_INVENTORY, "C", COLLECTION_USER_INVENTORY[COLLECTION_NAME] ),
+        SELECTCOLUMNS( COLLECTION_GROUPS_INVENTORY, "C", COLLECTION_GROUPS_INVENTORY[COLLECTION_NAME] )
+    )
+RETURN COUNTROWS( DirectOnly )
+
+Workflow Collection Health Pct_Base =
+DIVIDE(
+    DISTINCTCOUNT( COLLECTION_GROUPS_INVENTORY[COLLECTION_NAME] ),
+    DISTINCTCOUNT( Collections_LineOfBusiness_Mapping[COLLECTION_NAME] ),
+    0
+)
+
+Workflow Avg Runtime CM_Base =
+CALCULATE(
+    AVERAGE( QUEUE_WORKER_APPLICATION[FUL_RUN_TIME] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+Workflow Max Runtime CM_Base =
+CALCULATE(
+    MAX( QUEUE_WORKER_APPLICATION[FUL_RUN_TIME] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+Workflow Min Runtime CM_Base =
+CALCULATE(
+    MIN( QUEUE_WORKER_APPLICATION[FUL_RUN_TIME] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+Workflow Total Compute Hours CM_Base =
+DIVIDE(
+    CALCULATE(
+        SUM( QUEUE_WORKER_APPLICATION[FUL_RUN_TIME] ),
+        QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+        QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+    ),
+    3600
+)
+
+Workflow Last Run Date_Base =
+CALCULATE(
+    MAX( QUEUE_WORKER_APPLICATION[AYX_RUN_DT] ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+```
+
+#### L2 Base — NEW in V3
+
+```dax
+-- P95 runtime at workflow grain (for the new Avg Runtime by Workflow visual)
+Workflow P95 Runtime CM_Base =
+CALCULATE(
+    PERCENTILEX.INC(
+        QUEUE_WORKER_APPLICATION,
+        QUEUE_WORKER_APPLICATION[FUL_RUN_TIME],
+        0.95
+    ),
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] >= [_CM Start],
+    QUEUE_WORKER_APPLICATION[AYX_RUN_DT] <= [_CM End]
+)
+
+-- Compute hours attributable to governance issues (for KPI 2 sub-metric)
+Workflow Governance Compute Hours_Base =
+CALCULATE(
+    [Workflow Total Compute Hours CM_Base],
+    FILTER(
+        AYX_PROD_APPS_COLLECTION_SUMMARY,
+        AYX_PROD_APPS_COLLECTION_SUMMARY[Is_Orphaned_Flag] = 1
+            || AYX_PROD_APPS_COLLECTION_SUMMARY[Is_Duplicate_Flag] = 1
+    )
+)
+
+-- % of total platform compute consumed by governance issues
+Workflow Governance Compute Pct_Base =
+DIVIDE(
+    [Workflow Governance Compute Hours_Base],
+    CALCULATE(
+        [Workflow Total Compute Hours CM_Base],
+        ALL( AYX_PROD_APPS_COLLECTION_SUMMARY )
+    ),
+    0
+)
+```
+
+#### L3 Display
+
+```dax
+-- KPI Card 1
+Workflow Total =
+FORMAT( [Workflow Total_Base], "#,0" )
+
+Workflow Scheduled Label =
+"Scheduled:  " & FORMAT( [Workflow Scheduled_Base], "#,0" )
+
+Workflow Unscheduled Label =
+"Unscheduled:  " & FORMAT( [Workflow Unscheduled_Base], "#,0" )
+
+-- KPI Card 2 (refined in V3)
+Workflow Governance Issues =
+FORMAT( [Workflow Governance Issues_Base], "#,0" )
+
+Workflow Governance Compute Pct Label =
+"% of Platform Compute:  " & FORMAT( [Workflow Governance Compute Pct_Base], "0.0%" )
+
+Workflow Orphaned Label =
+"Orphaned:  " & FORMAT( [Workflow Orphaned_Base], "#,0" )
+
+-- KPI Card 3
+Workflow Collection Health =
+FORMAT( [Workflow Collection Health Pct_Base], "0.0%" )
+
+Workflow No AD Group Label =
+"No AD Group:  " & FORMAT( [Workflow Collections No AD Group_Base], "#,0" )
+
+Workflow Direct Users Only Label =
+"Direct User IDs Only:  " & FORMAT( [Workflow Collections Direct Users Only_Base], "#,0" )
+
+-- Table runtime columns
+Workflow Avg Runtime =
+VAR S = [Workflow Avg Runtime CM_Base]
+RETURN FORMAT( INT( S / 3600 ), "0" ) & ":" & FORMAT( INT( MOD( S, 3600 ) / 60 ), "00" ) & ":" & FORMAT( INT( MOD( S, 60 ) ), "00" )
+
+Workflow Max Runtime =
+VAR S = [Workflow Max Runtime CM_Base]
+RETURN FORMAT( INT( S / 3600 ), "0" ) & ":" & FORMAT( INT( MOD( S, 3600 ) / 60 ), "00" ) & ":" & FORMAT( INT( MOD( S, 60 ) ), "00" )
+
+Workflow Min Runtime =
+VAR S = [Workflow Min Runtime CM_Base]
+RETURN FORMAT( INT( S / 3600 ), "0" ) & ":" & FORMAT( INT( MOD( S, 3600 ) / 60 ), "00" ) & ":" & FORMAT( INT( MOD( S, 60 ) ), "00" )
+
+-- NEW in V3: P95 Runtime display for Avg Runtime by Workflow visual
+Workflow P95 Runtime =
+VAR S = [Workflow P95 Runtime CM_Base]
+RETURN FORMAT( INT( S / 3600 ), "0" ) & ":" & FORMAT( INT( MOD( S, 3600 ) / 60 ), "00" ) & ":" & FORMAT( INT( MOD( S, 60 ) ), "00" )
+
+-- Dynamic insight title for Top 10 compute chart
+Workflow Compute Chart Title =
+VAR TopN = 3
+VAR TopHours =
+    CALCULATE(
+        [Workflow Total Compute Hours CM_Base],
+        TOPN( TopN, ALL( AYX_PROD_APPS_COLLECTION_SUMMARY[APPNAME] ),
+            [Workflow Total Compute Hours CM_Base], DESC )
+    )
+VAR TotalHours =
+    CALCULATE( [Workflow Total Compute Hours CM_Base],
+        ALL( AYX_PROD_APPS_COLLECTION_SUMMARY )
+    )
+RETURN "Top " & TopN & " workflows account for "
+    & FORMAT( DIVIDE( TopHours, TotalHours, 0 ), "0%" )
+    & " of compute"
+
+-- Bar highlight for Top 10 Compute
+Workflow Compute Bar Color =
+VAR Rnk =
+    RANKX(
+        ALL( AYX_PROD_APPS_COLLECTION_SUMMARY[APPNAME] ),
+        [Workflow Total Compute Hours CM_Base], , DESC, DENSE
+    )
+RETURN IF( Rnk <= 2, "#3B4B8C", "#B0B0B0" )
+
+-- NEW in V3: Bar highlight for Avg Runtime by Workflow chart
+Workflow Avg Runtime Bar Color =
+VAR Rnk =
+    RANKX(
+        ALL( AYX_PROD_APPS_COLLECTION_SUMMARY[APPNAME] ),
+        [Workflow Avg Runtime CM_Base], , DESC, DENSE
+    )
+RETURN IF( Rnk <= 2, "#3B4B8C", "#B0B0B0" )
+```
+
+-----
+
+## Part 7 — Visual Placement Guide
+
+### 7.1 Screen 1 — Home
+
+**Status:** ✅ Built (V2). 🔨 Refinements in V3.
+
+#### Layout Diagram
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  WELLS FARGO    Alteryx Platform Metrics — Home              │
+│  [LOB ▼] [Collection ▼] [Email ▼]      [Month: Mar 2026 ▼]  │
+├──────────────────┬──────────────────┬─────────────────────┤
+│ Server Users     │ Average Runtime  │ Unique Workflow Runs │
+│ 3,010            │ 4:34             │ 1,896                │
+│ Production: 756  │ Prior Avg: 4:57  │ Scheduled: 48K       │
+│ Util: 75%        │ Max: 10:15:35    │ Long Running: 45     │
+├──────────────────────────┬──────────────────────────────────┤
+│ Worker Queue Depth       │ Scheduled Runs by LOB            │
+│ [bars by hour, peak      │ [horizontal bars, sorted DESC,   │
+│  highlighted, callout]   │  ≤7 LOBs]                        │
+├──────────────────────────┴──────────────────────────────────┤
+│  Top Workflows This Month (sorted by compute hours DESC)    │
+│  [AppName | Owner | LOB | Runs | Max Rt | Avg Rt | Date]    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### Visual Placement Table
+
+|Zone                  |Element                   |Field / Measure                                                                                    |Configuration                                                                                                                                                                     |
+|----------------------|--------------------------|---------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|Header                |Month Slicer              |`Dim_Date[Year_Month]`                                                                             |Top-right. Single-select. Default: most recent complete month.                                                                                                                    |
+|KPI 1 — Callout       |Server Users              |Existing measure                                                                                   |Card (new)                                                                                                                                                                        |
+|KPI 1 — Sub 1         |Production Users          |Existing                                                                                           |Reference label                                                                                                                                                                   |
+|KPI 1 — Sub 2         |License Utilization %     |Existing                                                                                           |Reference label                                                                                                                                                                   |
+|KPI 2 — Callout       |Average Runtime           |Existing                                                                                           |Card (new)                                                                                                                                                                        |
+|KPI 2 — Sub 1         |Prior Average Runtime     |Existing                                                                                           |Reference label                                                                                                                                                                   |
+|KPI 2 — Sub 2         |Max Runtime               |Existing                                                                                           |Reference label                                                                                                                                                                   |
+|KPI 3 — Callout       |Unique Workflows Runs     |Existing                                                                                           |Card (new)                                                                                                                                                                        |
+|KPI 3 — Sub 1         |Scheduled Runs            |Existing                                                                                           |Reference label                                                                                                                                                                   |
+|KPI 3 — Sub 2         |Long Running Workflows Avg|Existing                                                                                           |Reference label                                                                                                                                                                   |
+|**Visual L**          |Worker Queue Depth (bars) |Existing                                                                                           |Keep as-is with peak callout annotation                                                                                                                                           |
+|**Visual R — CHANGED**|**Scheduled Runs by LOB** |Y-axis: `Collections_LineOfBusiness_Mapping[LOB_Level_3]` · X-axis: `Home Scheduled Runs CM_Base`  |Horizontal bar. Sort descending. All bars `#B0B0B0`. Count labels outside end. Insight title: largest LOB by scheduled volume. Annotation: “Scheduled runs by LOB · Current month”|
+|**Table — CHANGED**   |Top Workflows This Month  |AppName · clean_email · **LOB** · Runs · Job Max Runtime · Job Avg Runtime · Latest Completion Date|**Sort: `Home Workflow Compute Hours CM_Base` DESC.** Conditional format: long runtime → amber background. Top 10–15 rows                                                         |
+
+### 7.2 Screen 2 — Adoption
+
+**Status:** 🔨 KPI 1 and KPI 3 DAX exist. KPI 2 is new in V3.
+
+#### Layout Diagram
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  WELLS FARGO    Alteryx Platform Metrics — Adoption          │
+│  [LOB ▼] [Collection ▼] [Email ▼]      [Month: Mar 2026 ▼]  │
+├──────────────────┬──────────────────┬─────────────────────┤
+│ Server Users     │ Collection       │ Active Users         │
+│ 3,010            │ Ownership Risk   │ 1,247                │
+│ Change Champ: 82 │ 12               │ % of Licensed: 31%   │
+│ Artisan Ct: 437  │ Avg per Own: 2.3 │ Prior 30-Day: 1,189  │
+│                  │ Max Single: 23   │                      │
+├──────────────────────────┬──────────────────────────────────┤
+│ Users by LOB             │ Login Recency Distribution       │
+│ [horizontal bars,        │ [4 buckets: 0-14, 15-30, 31-90,  │
+│  sorted DESC]            │  90+ highlighted]                │
+├──────────────────────────┴──────────────────────────────────┤
+│  Users This Month (sorted by Last Login DESC)               │
+│  [Name | Email | Role | CC | LOB | Coll | Last Login | WF]  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### Visual Placement Table
+
+|Zone                     |Element                       |Field / Measure                                                                                                           |Configuration                                                                                                                                                                                                                              |
+|-------------------------|------------------------------|--------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|Header                   |Month Slicer                  |`Dim_Date[Year_Month]`                                                                                                    |Top-right. Synced.                                                                                                                                                                                                                         |
+|KPI 1 — Callout          |Server Users                  |`Adoption Server Users`                                                                                                   |Card (new)                                                                                                                                                                                                                                 |
+|KPI 1 — Sub 1            |Change Champions              |`Adoption Change Champions Label`                                                                                         |Reference label                                                                                                                                                                                                                            |
+|KPI 1 — Sub 2            |Artisan Count                 |`Adoption Artisan Count Label`                                                                                            |Reference label                                                                                                                                                                                                                            |
+|**KPI 2 — Callout — NEW**|**Collection Ownership Risk** |`Adoption Collection Ownership Risk`                                                                                      |Card (new). Label: “Owners with 5+ Collections”                                                                                                                                                                                            |
+|**KPI 2 — Sub 1 — NEW**  |Avg Collections per Owner     |`Adoption Avg Collections Per Owner Label`                                                                                |Reference label                                                                                                                                                                                                                            |
+|**KPI 2 — Sub 2 — NEW**  |Max Collections (Single Owner)|`Adoption Max Collections Label`                                                                                          |Reference label                                                                                                                                                                                                                            |
+|KPI 3 — Callout          |Active Users                  |`Adoption Active Users`                                                                                                   |Card (new)                                                                                                                                                                                                                                 |
+|KPI 3 — Sub 1            |Active %                      |`Adoption Active User Pct Label`                                                                                          |Reference label                                                                                                                                                                                                                            |
+|KPI 3 — Sub 2            |Prior 30-Day Active           |`Adoption Active Users Prior Label`                                                                                       |Reference label                                                                                                                                                                                                                            |
+|Visual L                 |Users by LOB                  |Y-axis: `LOB_Level_3` · X-axis: `Adoption Server Users_Base`                                                              |Clustered bar. Sorted descending. All bars `#B0B0B0`. Count labels outside end. Insight title: largest LOB headcount. Annotation: “Active licensed users by LOB · Current month”                                                           |
+|Visual R                 |Login Recency Distribution    |X-axis: `Login_Recency_Bucket` · Y-axis: COUNTROWS                                                                        |Column chart. Sort by `Login_Bucket_Sort`. Bars 0–14/15–30/31–90 = `#B0B0B0`. 90+ bar = `#3B4B8C` via conditional fx. Insight title: “X users haven’t logged in for 90+ days”. Annotation: “Users by days since last login · Current month”|
+|Table                    |User grain                    |Name · Email · `Role_Label` · `Is_Change_Champion` · LOB · Collection count · `LastLoginDate` · `Adoption Owned Workflows`|Sort: `LastLoginDate` DESC. Conditional format: `LastLoginDate` amber `#E5AC12` if > 90 days ago. `Is_Change_Champion = 1` → green badge. `Role_Label` = Artisan → `#3B4B8C` font                                                          |
+
+### 7.3 Screen 3 — Job Runs (renamed from Queue)
+
+**Status:** 📋 To build.
+
+#### Layout Diagram
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  WELLS FARGO    Alteryx Platform Metrics — Job Runs          │
+│  [LOB ▼] [Collection ▼] [Email ▼]      [Month: Mar 2026 ▼]  │
+├──────────────────┬──────────────────┬─────────────────────┤
+│ Total Runs       │ Avg Runtime      │ Error Rate           │
+│ [CM count]       │ [CM H:MM:SS]     │ [CM %]               │
+│ Scheduled:       │ P95:             │ Failed Count:        │
+│ Manual:          │ Prior Month:     │ Prior Month:         │
+├──────────────────────────┬──────────────────────────────────┤
+│ Runtime Distribution     │ Wait Time by Hour                │
+│ [5 buckets: 0-1, 1-5,    │ [24 hours, peak bars highlighted │
+│  5-15, 15-30, 30+ min]   │  via PEAK flag, dashed avg line] │
+├──────────────────────────┴──────────────────────────────────┤
+│  Longest-Running Jobs This Month (sorted by duration DESC)  │
+│  [App | Email | LOB | Run Date | Time | Runtime | Status |  │
+│   Trigger Type] -- Wait_Time column REMOVED (in visual)     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### Visual Placement Table
+
+|Zone               |Element             |Field / Measure                                                                                            |Configuration                                                                                                                                                                                                                                          |
+|-------------------|--------------------|-----------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|Header             |Month Slicer        |`Dim_Date[Year_Month]`                                                                                     |Top-right. Synced.                                                                                                                                                                                                                                     |
+|KPI 1 — Callout    |Total Runs          |`Queue Total Runs`                                                                                         |Card (new)                                                                                                                                                                                                                                             |
+|KPI 1 — Sub 1      |Scheduled           |`Queue Scheduled Runs Label`                                                                               |Reference label                                                                                                                                                                                                                                        |
+|KPI 1 — Sub 2      |Manual              |`Queue Manual Runs Label`                                                                                  |Reference label                                                                                                                                                                                                                                        |
+|KPI 2 — Callout    |Avg Runtime         |`Queue Avg Runtime`                                                                                        |Card (new)                                                                                                                                                                                                                                             |
+|KPI 2 — Sub 1      |P95                 |`Queue P95 Runtime Label`                                                                                  |Reference label                                                                                                                                                                                                                                        |
+|KPI 2 — Sub 2      |Prior Month         |`Queue Avg Runtime PM Label`                                                                               |Reference label                                                                                                                                                                                                                                        |
+|KPI 3 — Callout    |Error Rate          |`Queue Error Rate`                                                                                         |Card (new)                                                                                                                                                                                                                                             |
+|KPI 3 — Sub 1      |Failed Count        |`Queue Failed Runs Label`                                                                                  |Reference label                                                                                                                                                                                                                                        |
+|KPI 3 — Sub 2      |Prior Month         |`Queue Error Rate PM Label`                                                                                |Reference label                                                                                                                                                                                                                                        |
+|Visual L           |Runtime Distribution|X-axis: `Runtime_Bucket` · Y-axis: `Queue Run Count By Bucket_Base`                                        |Clustered bar. Sort by `Runtime_Bucket_Sort`. Bars 0–1/1–5/5–15/15–30 = `#B0B0B0`. 30+ = `#3B4B8C` via conditional fx. Insight title: skew toward long runs. Annotation: “Runs by execution duration · Current month”                                  |
+|Visual R           |Wait Time by Hour   |X-axis: `Run_Hour` · Y-axis: `Queue Avg Wait Time CM_Base`                                                 |Column chart (24 hours — spec exception justified). All bars `#B0B0B0`. `PEAK = 1` bars = `#3B4B8C`. Dashed avg reference line `#808080`. Visual title: `Queue Wait Time Chart Title` via fx. Annotation: “Avg queue wait time by hour · Current month”|
+|**Table — CHANGED**|Longest-Running Jobs|APPNAME · `clean_email` · LOB · `AYX_RUN_DT` · `START_TIME` · `Runtime_Formatted` · STATUS · `Trigger_Type`|**Sort: `Total_Duration_Seconds` DESC.** **Wait_Time_Formatted column REMOVED** (visual on right covers this). Conditional format: STATUS = Error → `#CC3333` font. `Trigger_Type` = Scheduled → `#3B4B8C` font                                        |
+
+### 7.4 Screen 4 — Workflows
+
+**Status:** 📋 To build. Visual R changed in V3.
+
+#### Layout Diagram
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  WELLS FARGO    Alteryx Platform Metrics — Workflows         │
+│  [LOB ▼] [Collection ▼] [Email ▼]      [Month: Mar 2026 ▼]  │
+├──────────────────┬──────────────────┬─────────────────────┤
+│ Total Workflows  │ Governance       │ Collection Health    │
+│ [count]          │ Issues           │ [%]                  │
+│ Scheduled:       │ % of Compute:    │ No AD Group:         │
+│ Unscheduled:     │ Orphaned:        │ Direct Users Only:   │
+├──────────────────────────┬──────────────────────────────────┤
+│ Top 10 Compute Hours     │ Avg Runtime by Workflow          │
+│ [horizontal bars,        │ [horizontal bars, top 10,        │
+│  top 2 highlighted]      │  P95 in tooltip]                 │
+├──────────────────────────┴──────────────────────────────────┤
+│  Workflow Performance This Month (sorted by compute DESC)   │
+│  [App | Owner | LOB | Coll | Sched | Avg | Max | Min |      │
+│   P95 | Last Run | Governance Flags]                        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### Visual Placement Table
+
+|Zone                       |Element                    |Field / Measure                                                                                                                                                                                                                                                |Configuration                                                                                                                                                                                                                                                                                                                            |
+|---------------------------|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|Header                     |Month Slicer               |`Dim_Date[Year_Month]`                                                                                                                                                                                                                                         |Top-right. Synced.                                                                                                                                                                                                                                                                                                                       |
+|KPI 1 — Callout            |Total Workflows            |`Workflow Total`                                                                                                                                                                                                                                               |Card (new)                                                                                                                                                                                                                                                                                                                               |
+|KPI 1 — Sub 1              |Scheduled                  |`Workflow Scheduled Label`                                                                                                                                                                                                                                     |Reference label                                                                                                                                                                                                                                                                                                                          |
+|KPI 1 — Sub 2              |Unscheduled                |`Workflow Unscheduled Label`                                                                                                                                                                                                                                   |Reference label                                                                                                                                                                                                                                                                                                                          |
+|KPI 2 — Callout            |Governance Issues          |`Workflow Governance Issues`                                                                                                                                                                                                                                   |Card (new)                                                                                                                                                                                                                                                                                                                               |
+|**KPI 2 — Sub 1 — CHANGED**|% of Platform Compute      |`Workflow Governance Compute Pct Label`                                                                                                                                                                                                                        |Reference label (replaced Orphaned count)                                                                                                                                                                                                                                                                                                |
+|KPI 2 — Sub 2              |Orphaned                   |`Workflow Orphaned Label`                                                                                                                                                                                                                                      |Reference label (moved from Sub 1)                                                                                                                                                                                                                                                                                                       |
+|KPI 3 — Callout            |Collection Health          |`Workflow Collection Health`                                                                                                                                                                                                                                   |Card (new)                                                                                                                                                                                                                                                                                                                               |
+|KPI 3 — Sub 1              |No AD Group                |`Workflow No AD Group Label`                                                                                                                                                                                                                                   |Reference label                                                                                                                                                                                                                                                                                                                          |
+|KPI 3 — Sub 2              |Direct Users Only          |`Workflow Direct Users Only Label`                                                                                                                                                                                                                             |Reference label                                                                                                                                                                                                                                                                                                                          |
+|Visual L                   |Top 10 Compute Bar         |Y-axis: `APPNAME` (Top N filter = 10) · X-axis: `Workflow Total Compute Hours CM_Base`                                                                                                                                                                         |Horizontal bar. Sort descending. Bar color via `Workflow Compute Bar Color` fx. Dashed avg reference line `#808080`. Visual title: `Workflow Compute Chart Title` via fx. Annotation: “Top 10 workflows by compute hours · Current month”. Tooltip: Avg · P95 · Max runtime                                                              |
+|**Visual R — CHANGED**     |**Avg Runtime by Workflow**|Y-axis: `APPNAME` (Top N filter = 10) · X-axis: `Workflow Avg Runtime CM_Base`                                                                                                                                                                                 |Horizontal bar. Sort descending by avg runtime. Bar color via `Workflow Avg Runtime Bar Color` fx. Data labels: formatted H:MM:SS. Insight title: slowest-average workflow with runtime. Annotation: “Top 10 workflows by average runtime · Current month”. **Tooltip includes `Workflow P95 Runtime` to surface erratic-runtime signal**|
+|Table                      |Workflow grain             |APPNAME · `clean_email` · LOB · COLLECTION_NAME · Scheduled flag · `Workflow Avg Runtime` · `Workflow Max Runtime` · `Workflow Min Runtime` · `Workflow P95 Runtime` · `Workflow Last Run Date_Base` · `Is_Orphaned_Flag` · `Is_Duplicate_Flag` · AD Group flag|Sort: `Workflow Total Compute Hours CM_Base` DESC. Conditional format: `Is_Orphaned_Flag = 1` → amber row bg. `Is_Duplicate_Flag = 1` → amber font. No AD Group → amber font on collection column. Scheduled flag = yes → `#3B4B8C` font                                                                                                 |
+
+-----
+
+## Part 8 — Slicer Responsiveness Matrix
+
+All measures respond to Month slicer via `_Active Month` anchors (Part 4.1). Rolling 30-day measures on Adoption are independent.
+
+|Measure                             |Month|LOB|Collection|Publisher Email|Notes                                       |
+|------------------------------------|-----|---|----------|---------------|--------------------------------------------|
+|`Adoption Server Users`             |❌    |✅  |✅         |✅ single user  |User count is point-in-time, not monthly    |
+|`Adoption Active Users`             |❌    |✅  |✅         |✅              |Uses rolling 30-day window, not month       |
+|`Adoption Collection Ownership Risk`|❌    |✅  |✅         |⚠️ indirect     |Collection-level, not month-scoped          |
+|`Queue Total Runs`                  |✅    |✅  |✅         |✅              |All queue measures use `_CM Start`/`_CM End`|
+|`Queue Avg Wait Time CM_Base`       |✅    |✅  |✅         |✅              |`Run_Hour` unaffected by month filter       |
+|`Queue Error Rate`                  |✅    |✅  |✅         |✅              |Numerator and denominator both month-scoped |
+|`Workflow Total`                    |❌    |✅  |✅         |✅ publisher    |Workflow existence is point-in-time         |
+|`Workflow Governance Issues`        |❌    |✅  |✅         |✅ publisher    |Governance state is point-in-time           |
+|`Workflow Avg Runtime CM_Base`      |✅    |✅  |✅         |✅              |Month-scoped via run dates                  |
+|`Workflow P95 Runtime CM_Base`      |✅    |✅  |✅         |✅              |Month-scoped via run dates                  |
+|`Workflow Governance Compute Pct`   |✅    |✅  |✅         |✅              |Compute denominator is month-scoped         |
+|`Home Scheduled Runs CM_Base`       |✅    |✅  |✅         |✅              |LOB resolved via workflow ownership chain   |
+
+### Required Relationships
+
+|From                                |To                                  |Join Key                 |Cardinality  |Direction|
+|------------------------------------|------------------------------------|-------------------------|-------------|---------|
+|`Dim_Date`                          |`QUEUE_WORKER_APPLICATION`          |`Date_Key` → `AYX_RUN_DT`|1:Many       |Single → |
+|`QUEUE_WORKER_APPLICATION`          |`AYX_PROD_APPS_COLLECTION_SUMMARY`  |`AS_APPLICATION_ID`      |Many:Many    |Single → |
+|`AYX_PROD_APPS_COLLECTION_SUMMARY`  |`Collections_LineOfBusiness_Mapping`|`COLLECTION_NAME`        |Many:1       |Single → |
+|`Collections_LineOfBusiness_Mapping`|`COLLECTION_GROUPS_INVENTORY`       |`COLLECTION_NAME`        |1:Many       |Single → |
+|`Collections_LineOfBusiness_Mapping`|`COLLECTION_USER_INVENTORY`         |`COLLECTION_NAME`        |1:Many       |Single → |
+|`AYX_PROD_APPS_COLLECTION_SUMMARY`  |`ENABLED_SCHEDULE_DETIALED_SUMMARY` |`AS_APPLICATION_ID`      |Many:Many    |Single → |
+|`USERS_EMPLOYEE_LOB`                |`ChangeChampion`                    |`clean_email`            |Many:1       |Single → |
+|`QUEUE_USERS_LOB`                   |`QUEUE_WORKER_APPLICATION`          |`JOB_ID` [CONFIRM]       |1:1 or Many:1|Single → |
+
+
+> **Do not enable bidirectional cross-filter on any Many:Many relationship.** Bidirectional on Many:Many causes filter ambiguity and performance degradation.
+
+-----
+
+## Part 9 — Confirmation Checklist
+
+Before deploying any measure to the live model, verify:
+
+|# |Item                                                           |What to Confirm                                                                                   |
+|--|---------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+|1 |`FUL_RUN_TIME` unit                                            |Seconds, minutes, or milliseconds — adjust all runtime divisors                                   |
+|2 |`QUEUE_TIME` unit                                              |Seconds — adjust wait time divisors if different                                                  |
+|3 |`STATUS` error string                                          |Exact value: “Error”, “RunWithErrors”, or other                                                   |
+|4 |`clean_email` canonical table                                  |`QUEUE_USERS_LOB` or `USERS_EMPLOYEE_LOB` — one source of truth                                   |
+|5 |`LOB_Level_3` field name                                       |Exact column name in `Collections_LineOfBusiness_Mapping`                                         |
+|6 |`Role` field type and values                                   |Integer (0/2/3) or string — affects `Role_Label` SWITCH                                           |
+|7 |Change Champion email fields                                   |Confirm field names match between `USERS_EMPLOYEE_LOB` and `ChangeChampion`                       |
+|8 |`Trigger_Type` relationship path                               |Confirm `ENABLED_SCHEDULE_DETIALED_SUMMARY` relationship and join key                             |
+|9 |`QUEUE_WORKER_APPLICATION` → `QUEUE_USERS_LOB` join            |Confirm join key: `JOB_ID` or another field                                                       |
+|10|`COLLECTION_NAME` orphan value                                 |Confirm blank vs. null-equivalent in `AYX_PROD_APPS_COLLECTION_SUMMARY`                           |
+|11|**`Year_Month` column in `Dim_Date`**                          |Confirm exists; if not, create as calculated column `FORMAT(Date_Key, "YYYY-MM")`                 |
+|12|**`OWNER_EMAIL` field on `Collections_LineOfBusiness_Mapping`**|Exact column name — drives Collection Ownership Risk measures                                     |
+|13|**Month slicer default behavior**                              |Verify `_Default Month` returns expected most-recent-complete-month string on fresh dashboard load|
+|14|**`Dim_Date` → `QUEUE_WORKER_APPLICATION` relationship**       |Required for month slicer to filter fact. Confirm `Date_Key` / `AYX_RUN_DT` types align           |
+
+-----
+
+## Part 10 — Screen Summary
+
+|Screen       |Audience                    |Grain           |KPIs|Visuals                                        |Table                                |Status                          |
+|-------------|----------------------------|----------------|----|-----------------------------------------------|-------------------------------------|--------------------------------|
+|**Home**     |Ops, community              |Job run         |3   |Worker Queue Depth bars · Scheduled Runs by LOB|Top Workflows (compute DESC, LOB col)|✅ Built · V3 refinements pending|
+|**Adoption** |Platform team, LOB leaders  |User / ownership|3   |Users by LOB · Login Recency                   |User grain (LastLogin DESC)          |🔨 V3 KPI 2 new                  |
+|**Job Runs** |Power users, ops            |Job run         |3   |Runtime Distribution · Wait Time by Hour       |Longest jobs (duration DESC)         |📋 To build                      |
+|**Workflows**|Change Champions, publishers|Workflow        |3   |Top 10 Compute · Avg Runtime by Workflow       |Workflow grain (compute DESC)        |📋 To build                      |
+
+-----
+
+## Part 11 — Build Sequence
+
+Recommended order of operations:
+
+1. **Infrastructure DAX (Part 4.1)** — add `_Default Month`, `_Active Month`, revised `_CM Start`, `_CM End`, `_PM Start`, `_PM End` measures. Test that changing the Month slicer drives all anchors correctly.
+1. **Dim_Date `Year_Month` column** (if not present) — add as calculated column.
+1. **Month slicer** — add to Home page first. Test drives existing Home measures correctly. Then sync to other pages.
+1. **Home refinements** — swap right visual to Scheduled Runs by LOB. Add LOB column and resort detail table.
+1. **Adoption KPI 2 rebuild** — add Collection Ownership Risk measures. Verify OWNER_EMAIL field exists.
+1. **Job Runs build** — existing DAX is mostly ready. Wire visuals and table per Part 7.3.
+1. **Workflows build** — existing DAX ready. Add `Workflow P95 Runtime CM_Base` and `Workflow Governance Compute Pct_Base`. Wire visuals and table per Part 7.4.
+1. **Cross-page validation** — change Month slicer on any page; verify all KPIs and visuals refresh consistently across all four pages.
+
+-----
+
+*End of specification V3.*
